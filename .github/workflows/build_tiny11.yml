@@ -1,0 +1,86 @@
+name: Build Tiny11 ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      iso_url:
+        description: 'Optional: Override ISO URL'
+        required: false
+      tiny_base_version:
+        description: 'Version key to lookup in map (default: 11l)'
+        required: false
+        default: '11'
+      scratch_drive:
+        description: 'Optional: Scratch Drive (e.g. D)'
+        required: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      TINY_BASE_VERSION: ${{ inputs.tiny_base_version || '11l' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve ISO URL
+        id: resolve
+        shell: powershell
+        run: |
+          # 1. Check for manual override
+          $manual = "${{ inputs.iso_url }}"
+          if (-not [string]::IsNullOrWhiteSpace($manual)) {
+            echo "url=$manual" >> $env:GITHUB_OUTPUT
+            return
+          }
+
+          # 2. Read from iso_map.json
+          $jsonPath = "iso_map.json"
+          if (-not (Test-Path $jsonPath)) {
+            Write-Error "iso_map.json not found! Please run the 'Update ISO Map' workflow first."
+            exit 1
+          }
+
+          $map = Get-Content $jsonPath -Raw | ConvertFrom-Json
+          $key = $env:TINY_BASE_VERSION
+          
+          # Note: PowerShell object properties are accessible via dot notation
+          # We use a trick to access dynamic property names safely
+          $url = $map.PSObject.Properties[$key].Value
+
+          if (-not $url -or $url -eq "null") {
+            Write-Error "URL not found for version key: $key"
+            exit 1
+          }
+
+          Write-Host "Found URL for $key : $url"
+          echo "url=$url" >> $env:GITHUB_OUTPUT
+
+      - name: Download Windows ISO
+        shell: powershell
+        run: |
+          $url = "${{ steps.resolve.outputs.url }}"
+          Write-Host "Downloading..."
+          Invoke-WebRequest -Uri "$url" -OutFile "win11.iso" -UserAgent "Mozilla/5.0"
+
+      - name: Build Tiny11
+        shell: powershell
+        run: |
+          # Mount ISO
+          $mount = Mount-DiskImage -ImagePath "$(Get-Location)\win11.iso" -StorageType ISO -PassThru
+          $isoDrive = ($mount | Get-Volume).DriveLetter
+
+          # Determine Scratch
+          $finalScratch = (Get-Location).Drive.Name
+          if ("${{ inputs.scratch_drive }}") { $finalScratch = "${{ inputs.scratch_drive }}" }
+          
+          # Run Builder (Pipe '1' for index)
+          "1" | .\tiny11maker.ps1 -ISO $isoDrive -SCRATCH $finalScratch
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiny11-iso
+          path: tiny11.iso
+          retention-days: 1

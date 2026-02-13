@@ -1,0 +1,30 @@
+name: Update ISO Map
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-map:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Your Repo
+        uses: actions/checkout@v4
+
+      - name: Generate URL Map
+        id: generate
+        shell: bash
+        run: ./update_iso_map.sh --debug 11 --output iso_map.json
+
+      - name: Commit and Push Map
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add iso_map.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update ISO URL map [skip ci]"
+            git push
+          fi
